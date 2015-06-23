@@ -83,12 +83,11 @@ module RadioactiveBunnies::Worker
     private
 
     def startup_init
+      deadletter_init(@queue_opts)
       @working_since = Time.now
       @jobs_stats = { :failed => Atomic.new(0), :passed => Atomic.new(0) }
-      @queue_opts[:exchange] ||= @context.default_exchange
       @logger = @context.logger
       set_thread_pool
-      deadletter_init(@queue_opts)
     end
 
     def set_thread_pool
@@ -117,8 +116,8 @@ module RadioactiveBunnies::Worker
       @logger.info "[#{self.name}] #{text}"
     end
 
-    def error(text, msg)
-      @logger.error "[#{self.name}] #{text} <#{msg}>"
+    def error(text, metadata)
+      @logger.error "[#{self.name}] #{text} <#{metadata.inspect}>"
     end
 
     def incr!(what)
