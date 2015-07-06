@@ -8,7 +8,7 @@ class RadioactiveBunnies::Context
           :username, :password, :exchange, :workers_scope]
 
   EXCHANGE_DEFAULTS = {name: 'frenzy_bunnies', type: :direct, durable: false}.freeze
-  CONFIG_DEFAULTS = { host: 'localhost', heartbeat: 5, web_host: 'localhost', web_port: 11333,
+  CONFIG_DEFAULTS = { host: 'localhost', heartbeat: 30, web_host: 'localhost', web_port: 11333,
     enable_web_stats: false, web_threadfilter: /^pool-.*/, env: 'development',
     exchange: EXCHANGE_DEFAULTS
   }.freeze
@@ -31,6 +31,7 @@ class RadioactiveBunnies::Context
   end
 
   def self.add_worker(wrk_class)
+    return @@known_workers unless(!!wrk_class.name rescue nil)
     @@known_workers << wrk_class.name
   end
 
@@ -49,7 +50,7 @@ class RadioactiveBunnies::Context
   end
 
   def run(*klasses)
-    @workers = (klasses + worker_classes_for_scope).flatten
+    @workers = (klasses + worker_classes_for_scope).flatten.compact
     start_rabbit_connection!
     @workers.each{|klass| klass.start(self)}
     start_web_console
@@ -60,6 +61,10 @@ class RadioactiveBunnies::Context
     @logger.info 'Shutting down workers and closing connection'
     stop_workers
     @connection.close
+  end
+
+  def workers
+    @workers ||= []
   end
 
   def stop_workers
@@ -80,13 +85,9 @@ class RadioactiveBunnies::Context
   def rabbit_params
     params = { :heartbeat_interval => @opts[:heartbeat]}
     if !!@opts[:uri]
-      params[:uri] = @opts[:uri] if @opts[:uri]
+      params[:uri] = @opts[:uri]
     else
-      params[:host] = @opts[:host] if @opts[:host]
-      params[:username] = @opts[:username] if @opts[:username]
-      params[:password] = @opts[:password] if @opts[:password]
-      params[:port] = @opts[:port] if @opts[:port]
-      params[:vhost] = @opt[:vhost] if @opts[:vhost]
+      params.merge!(@opts.select {|k,v| [:host, :username, :password, :vhost, :port].include? k})
     end
     params
   end
@@ -110,7 +111,4 @@ class RadioactiveBunnies::Context
       stop
     end
   end
-
-
 end
-

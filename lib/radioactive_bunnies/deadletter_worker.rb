@@ -9,15 +9,25 @@ module RadioactiveBunnies
         @dl_producers ||= []
       end
 
-      def deadletter_init(worker_opts)
+      def deadletter_init(context, worker_opts)
         return unless !!worker_opts[:deadletter_workers]
-        worker_list = [worker_opts[:deadletter_workers]].flatten
-        exchanges = worker_list.inject([]) do |deadletter_exchange, worker|
-          worker_klass = RadioactiveBunnies::Ext::Util.constantize!(worker)
-          worker_klass.register_with_deadletter_worker(self)
-          deadletter_exchange << worker_klass.queue_opts[:exchange][:name]
-        end
+        worker_list = deadletter_klasses_for(worker_opts[:deadletter_workers])
+        exchanges = deadletter_exchanges_from_workers(worker_list)
         validate_deadletter_exchanges!(exchanges)
+        RadioactiveBunnies::DeadletterWorker.ensure_worker_will_start(context, worker_list)
+      end
+
+      def deadletter_klasses_for(workers)
+        [workers].flatten.compact.map do |klass_name|
+          RadioactiveBunnies::Ext::Util.constantize!(klass_name)
+        end
+      end
+
+      def deadletter_exchanges_from_workers(deadletter_workers)
+        deadletter_workers.inject([]) do |deadletter_exchange, worker|
+          worker.register_with_deadletter_worker(self)
+          deadletter_exchange << worker.queue_opts[:exchange][:name]
+        end
       end
 
       def validate_deadletter_exchanges!(exchanges)
@@ -25,7 +35,6 @@ module RadioactiveBunnies
         raise DeadletterError.nil_exchange(self) if exchanges.include? nil
         self.deadletter_exchange = exchanges.first
       end
-
     end
 
     class << self
@@ -33,8 +42,17 @@ module RadioactiveBunnies
         return {} unless !!q_opts[:deadletter_exchange]
         {arguments: {'x-dead-letter-exchange' => q_opts[:deadletter_exchange]}}
       end
+
+      def ensure_worker_will_start(context, worker_list = [])
+        worker_list.each do |deadletter_worker|
+          next if context.workers.include? deadletter_worker
+          context.workers << deadletter_worker
+          deadletter_worker.start(context) unless deadletter_worker.running?
+        end
+      end
     end
   end
+
   class DeadletterError < StandardError
     def self.multiple_exchanges(klass, exchanges)
       new("Multiple deadletter exchanges in [#{klass.name}] - exchanges are <#{exchanges}>")

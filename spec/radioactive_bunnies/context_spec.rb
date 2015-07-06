@@ -36,6 +36,7 @@ describe RadioactiveBunnies::Context do
       it '#uri overides rabbit connection params host, vhost, port, username and password' do
         uri = 'amqp://guest:guest@localhost:5672/%2F'
         host = 'foo'
+        expect(ctx.rabbit_params).to include(host: 'localhost')
         ctx.uri uri
         ctx.host host
         expect(ctx.rabbit_params).to include(uri: uri)

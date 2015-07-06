@@ -57,11 +57,15 @@ module RadioactiveBunnies::Worker
       say "stopping"
       @thread_pool.shutdown_now
       say "stopped"
-      @stopped = true
+      @running = false
     end
 
     def stopped?
-      @stopped
+      !@running
+    end
+
+    def running?
+      @running
     end
 
     def queue_opts
@@ -83,7 +87,8 @@ module RadioactiveBunnies::Worker
     private
 
     def startup_init
-      deadletter_init(@queue_opts)
+      @running = true
+      deadletter_init(@context, @queue_opts)
       @working_since = Time.now
       @jobs_stats = { :failed => Atomic.new(0), :passed => Atomic.new(0) }
       @logger = @context.logger

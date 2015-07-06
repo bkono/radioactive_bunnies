@@ -12,6 +12,16 @@ class DeadletterDefaultWorker
   end
 end
 
+class DeadletterSecondWorker
+  include RadioactiveBunnies::Worker
+  from_queue 'deadletter.second',
+    prefetch: 20, durable: false, timeout_job_after: 5, threads: 1, append_env: true,
+    exchange: {type: :fanout, name: 'deadletter.exchange'}
+  def work(metadata, msg)
+    true
+  end
+end
+
 class DeadletterDefaultWorkerTwo
   include RadioactiveBunnies::Worker
   from_queue 'deadletter.default.two',
@@ -27,7 +37,7 @@ class DeadletterProducer
   include RadioactiveBunnies::Worker
   from_queue 'deadletter.producer',
     prefetch: 20, timeout_job_after: JOB_TIMEOUT, threads: 2,
-    deadletter_workers: ['DeadletterDefaultWorker']
+    deadletter_workers: ['DeadletterDefaultWorker', 'DeadletterSecondWorker']
   def work(metadata, msg)
     sleep (JOB_TIMEOUT + 5)
   end
@@ -60,7 +70,7 @@ describe RadioactiveBunnies::DeadletterWorker do
     @ch = @conn.create_channel
     @ctx = RadioactiveBunnies::Context.new
     @ctx.log_with(Logger.new(STDOUT))
-    @ctx.run DeadletterProducer, DeadletterDefaultWorker, DeadletterProducerNonArray
+    @ctx.run DeadletterDefaultWorker, DeadletterProducer, DeadletterProducerNonArray
     ['deadletter.producer', 'deadletter.producer.nonarray'].each do |r_key|
       @ch.default_exchange.publish("hello world", routing_key: r_key)
     end
@@ -68,16 +78,21 @@ describe RadioactiveBunnies::DeadletterWorker do
   end
 
   after(:all) do
-    @conn.close
     @ctx.stop
+    @conn.close
   end
   context 'when a worker has at least one deadletter class' do
 
     it 'registers with the specified deadletter worker based on a single string class name' do
       expect(DeadletterDefaultWorker.deadletter_producers).to include(DeadletterProducer.name)
     end
+
     it 'notifies the deadletter worker when a single deadletter work is identified' do
       expect(DeadletterDefaultWorker.deadletter_producers).to include(DeadletterProducerNonArray.name)
+    end
+
+    it 'starts any deadletter workers that are not running regardless of class name' do
+      expect(DeadletterSecondWorker.running?).to be_truthy
     end
 
     context 'with two deadletter workers requesting different deadletter exchange names' do
@@ -86,6 +101,7 @@ describe RadioactiveBunnies::DeadletterWorker do
           to raise_error RadioactiveBunnies::DeadletterError
       end
     end
+
     context 'with a deadletter worker that has a nil exchange name' do
       it 'a worker raises an error on start' do
         DeadletterProducerBroken.queue_opts[:deadletter_workers] = 'DeadletterDefaultWorkerTwo'
@@ -93,6 +109,7 @@ describe RadioactiveBunnies::DeadletterWorker do
           to raise_error RadioactiveBunnies::DeadletterError
       end
     end
+
   end
 
   describe '.deadletter_queue_config(q_opts)' do
