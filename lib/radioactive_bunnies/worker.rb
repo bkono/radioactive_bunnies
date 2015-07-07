@@ -16,15 +16,25 @@ module RadioactiveBunnies::Worker
 
   module ClassMethods
 
+    def routing_key
+      @queue_opts[:routing_key] || @queue_name
+    end
+
     def from_queue(q_name, opts={})
       @queue_name = q_name
       @queue_opts = opts
     end
 
+    def add_binding(routing_key)
+      @queue.bind(@exchange, routing_key: routing_key)
+    end
+
     def start(context)
+      return if running? # don't call me twice
+
       @context = context
       startup_init
-      @queue = build_queue
+      @exchange, @queue = build_exchange_and_queue
 
       @queue.subscribe(:ack => true, :blocking => false, :executor => @thread_pool) do |metadata, payload|
         wkr = new
@@ -49,7 +59,7 @@ module RadioactiveBunnies::Worker
           error "ERROR #{$!}", metadata
         end
       end
-      say "workers up."
+      say queue_description + "\nworkers up."
     end
 
     def stop
@@ -88,6 +98,7 @@ module RadioactiveBunnies::Worker
 
     def startup_init
       @running = true
+      @queue_name = "#{@queue_name}_#{@context.opts[:env]}" if @queue_opts[:append_env]
       deadletter_init(@context, @queue_opts)
       @working_since = Time.now
       @jobs_stats = { :failed => Atomic.new(0), :passed => Atomic.new(0) }
@@ -103,11 +114,8 @@ module RadioactiveBunnies::Worker
       end
     end
 
-    def build_queue
-      @queue_name = "#{@queue_name}_#{@context.opts[:env]}" if @queue_opts[:append_env]
-      q = @context.queue_factory.build_queue(@queue_name, @queue_opts)
-      say queue_description
-      q
+    def build_exchange_and_queue
+      RadioactiveBunnies::QueueFactory.build_exchange_and_queue(@context, @queue_name, @queue_opts)
     end
 
     def queue_description

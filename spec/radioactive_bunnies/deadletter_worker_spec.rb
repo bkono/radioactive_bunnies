@@ -2,22 +2,36 @@ require 'spec_helper'
 require 'radioactive_bunnies'
 require 'support/workers/timeout_worker'
 JOB_TIMEOUT = 1
+PRODUCER_ITERATIONS = 50
 class DeadletterDefaultWorker
   include RadioactiveBunnies::Worker
   from_queue 'deadletter.default',
-    prefetch: 20, durable: false, timeout_job_after: 5, threads: 1, append_env: true,
+    prefetch: 1, durable: false, timeout_job_after: 5, threads: 1,
     exchange: {type: :fanout, name: 'deadletter.exchange'}
   def work(metadata, msg)
+    puts "This is the First"
+    true
+  end
+end
+
+class DeadletterProveFanout
+  include RadioactiveBunnies::Worker
+  from_queue 'deadletter.prove',
+    prefetch: 1, durable: false, timeout_job_after: 5, threads: 1,
+    exchange: {type: :fanout, name: 'deadletter.exchange'}
+  def work(metadata, msg)
+    puts "This is the Prove"
     true
   end
 end
 
 class DeadletterSecondWorker
   include RadioactiveBunnies::Worker
-  from_queue 'deadletter.second',
-    prefetch: 20, durable: false, timeout_job_after: 5, threads: 1, append_env: true,
+  from_queue 'deadletter.default',
+    prefetch: 1, durable: false, timeout_job_after: 5, threads: 1,
     exchange: {type: :fanout, name: 'deadletter.exchange'}
   def work(metadata, msg)
+    puts "This is the Second"
     true
   end
 end
@@ -25,7 +39,7 @@ end
 class DeadletterDefaultWorkerTwo
   include RadioactiveBunnies::Worker
   from_queue 'deadletter.default.two',
-    prefetch: 20, durable: false, timeout_job_after: 5, threads: 1, append_env: true,
+    prefetch: 20, durable: false, timeout_job_after: 5, threads: 1,
     exchange: {type: :fanout, name: nil}
 
   def work(metadata, msg)
@@ -37,9 +51,10 @@ class DeadletterProducer
   include RadioactiveBunnies::Worker
   from_queue 'deadletter.producer',
     prefetch: 20, timeout_job_after: JOB_TIMEOUT, threads: 2,
-    deadletter_workers: ['DeadletterDefaultWorker', 'DeadletterSecondWorker']
+    deadletter_workers: ['DeadletterDefaultWorker', 'DeadletterSecondWorker', 'DeadletterProveFanout']
   def work(metadata, msg)
-    sleep (JOB_TIMEOUT + 5)
+    # sleep (JOB_TIMEOUT + 0.5)
+    false
   end
 end
 
@@ -70,11 +85,14 @@ describe RadioactiveBunnies::DeadletterWorker do
     @ch = @conn.create_channel
     @ctx = RadioactiveBunnies::Context.new
     @ctx.log_with(Logger.new(STDOUT))
-    @ctx.run DeadletterDefaultWorker, DeadletterProducer, DeadletterProducerNonArray
-    ['deadletter.producer', 'deadletter.producer.nonarray'].each do |r_key|
-      @ch.default_exchange.publish("hello world", routing_key: r_key)
+    @ctx.run DeadletterProducer, DeadletterProducerNonArray
+    @producer_queues = ['deadletter.producer', 'deadletter.producer.nonarray']
+    PRODUCER_ITERATIONS.times do
+      @producer_queues.each do |r_key|
+        @ch.default_exchange.publish("hello world", routing_key: r_key)
+      end
     end
-    sleep 2
+    sleep 5
   end
 
   after(:all) do
@@ -120,8 +138,17 @@ describe RadioactiveBunnies::DeadletterWorker do
   end
 
   context 'when a worker with deadletter enabled timesout' do
-    it 'sends the deadletter to the correct deadletter worker' do
-      expect(DeadletterDefaultWorker.jobs_stats[:passed]).to eql 2
+    let(:total_messages_sent) {PRODUCER_ITERATIONS * @producer_queues.size}
+
+    it 'sends the deadletter to the correct round robin worker' do
+      half_of_messages_sent = total_messages_sent / 2
+      expect(DeadletterDefaultWorker.jobs_stats[:passed]).to be_within(5).of half_of_messages_sent
+      expect(DeadletterSecondWorker.jobs_stats[:passed]).to be_within(5).of half_of_messages_sent
+      expect(DeadletterDefaultWorker.jobs_stats[:passed] +
+             DeadletterSecondWorker.jobs_stats[:passed]).to eql total_messages_sent
+    end
+    it 'sends the prove to the correct deadletter worker' do
+      expect(DeadletterProveFanout.jobs_stats[:passed]).to eql total_messages_sent
     end
   end
 end

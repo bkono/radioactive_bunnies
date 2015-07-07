@@ -14,7 +14,7 @@ module RadioactiveBunnies
         worker_list = deadletter_klasses_for(worker_opts[:deadletter_workers])
         exchanges = deadletter_exchanges_from_workers(worker_list)
         validate_deadletter_exchanges!(exchanges)
-        RadioactiveBunnies::DeadletterWorker.ensure_worker_will_start(context, worker_list)
+        ensure_worker_will_start(context, worker_list)
       end
 
       def deadletter_klasses_for(workers)
@@ -35,6 +35,17 @@ module RadioactiveBunnies
         raise DeadletterError.nil_exchange(self) if exchanges.include? nil
         self.deadletter_exchange = exchanges.first
       end
+
+      def ensure_worker_will_start(context, worker_list = [])
+        worker_list.each do |deadletter_worker|
+          unless context.workers.include? deadletter_worker
+            context.workers << deadletter_worker
+            deadletter_worker.start(context) unless deadletter_worker.running?
+          end
+          deadletter_worker.add_binding(routing_key)
+        end
+      end
+
     end
 
     class << self
@@ -43,13 +54,6 @@ module RadioactiveBunnies
         {arguments: {'x-dead-letter-exchange' => q_opts[:deadletter_exchange]}}
       end
 
-      def ensure_worker_will_start(context, worker_list = [])
-        worker_list.each do |deadletter_worker|
-          next if context.workers.include? deadletter_worker
-          context.workers << deadletter_worker
-          deadletter_worker.start(context) unless deadletter_worker.running?
-        end
-      end
     end
   end
 

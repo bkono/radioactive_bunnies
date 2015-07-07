@@ -11,34 +11,42 @@ class RadioactiveBunnies::QueueFactory
     @connection = context.connection
   end
 
-  def build_queue(name, options = {})
-    q_opts = QUEUE_DEFAULTS.merge(options)
-    channel = @connection.create_channel
+
+  def self.build_exchange_and_queue(context, name, queue_opts = {})
+    q_opts = QUEUE_DEFAULTS.merge(queue_opts)
+    channel = context.connection.create_channel
     channel.prefetch = q_opts[:prefetch]
-    exchange = exchange_params(channel, q_opts)
-    create_and_bind_queue(channel, exchange, name, q_opts)
+    exchange = exchange_params(channel, exchange_config(context, q_opts))
+    queue = create_and_bind_queue(channel, exchange, name, q_opts)
+    [exchange, queue]
   end
 
-  private
-
-  def create_and_bind_queue(channel, exchange, name, q_opts)
-    routing_key = q_opts[:routing_key] || name
-    queue = channel.queue(name, queue_params(q_opts))
-    queue.bind(exchange, :routing_key => routing_key)
+  def build_queue(name, queue_opts = {})
+    exchange, queue = self.class.build_exchange_and_queue(@context, name, queue_opts)
     queue
   end
 
-  def queue_params(q_opts)
-    opts = {durable: q_opts[:durable]}
-    opts.merge(RadioactiveBunnies::DeadletterWorker.deadletter_queue_config(q_opts))
-  end
+  class << self
+    private
 
-  def exchange_params(channel, q_opts)
-    config = exchange_config(q_opts)
-    channel.exchange(config.delete(:name), config)
-  end
+    def create_and_bind_queue(channel, exchange, name, q_opts)
+      routing_key = q_opts[:routing_key] || name
+      queue = channel.queue(name, queue_params(q_opts))
+      queue.bind(exchange, :routing_key => routing_key)
+      queue
+    end
 
-  def exchange_config(q_opts = {})
-    @context.default_exchange.merge(q_opts[:exchange] || {})
+    def queue_params(q_opts)
+      opts = {durable: q_opts[:durable]}
+      opts.merge(RadioactiveBunnies::DeadletterWorker.deadletter_queue_config(q_opts))
+    end
+
+    def exchange_params(channel, config)
+      channel.exchange(config.delete(:name), config)
+    end
+
+    def exchange_config(context, q_opts = {})
+      context.default_exchange.merge(q_opts[:exchange] || {})
+    end
   end
 end
