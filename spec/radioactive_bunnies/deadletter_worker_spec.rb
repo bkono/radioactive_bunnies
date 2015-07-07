@@ -1,57 +1,8 @@
 require 'spec_helper'
 require 'radioactive_bunnies'
-require 'support/workers/timeout_worker'
-JOB_TIMEOUT = 1
-class DeadletterDefaultWorker
-  include RadioactiveBunnies::Worker
-  from_queue 'deadletter.default',
-    prefetch: 20, durable: false, timeout_job_after: 5, threads: 1, append_env: true,
-    exchange: {type: :fanout, name: 'deadletter.exchange'}
-  def work(metadata, msg)
-    true
-  end
-end
+require 'support/workers/deadletter_workers'
 
-class DeadletterDefaultWorkerTwo
-  include RadioactiveBunnies::Worker
-  from_queue 'deadletter.default.two',
-    prefetch: 20, durable: false, timeout_job_after: 5, threads: 1, append_env: true,
-    exchange: {type: :fanout, name: nil}
-
-  def work(metadata, msg)
-    ack!
-  end
-end
-
-class DeadletterProducer
-  include RadioactiveBunnies::Worker
-  from_queue 'deadletter.producer',
-    prefetch: 20, timeout_job_after: JOB_TIMEOUT, threads: 2,
-    deadletter_workers: ['DeadletterDefaultWorker']
-  def work(metadata, msg)
-    sleep (JOB_TIMEOUT + 5)
-  end
-end
-
-class DeadletterProducerNonArray
-  include RadioactiveBunnies::Worker
-  from_queue 'deadletter.producer.nonarray',
-    prefetch: 20, timeout_job_after: 1, threads: 2,
-    deadletter_workers: 'DeadletterDefaultWorker'
-  def work(metadata, msg)
-    false
-  end
-end
-
-class DeadletterProducerBroken
-  include RadioactiveBunnies::Worker
-  from_queue 'deadletter.producer.nonarray',
-    prefetch: 20, timeout_job_after: 1, threads: 2,
-    deadletter_workers: %w(DeadletterDefaultWorker DeadletterDefaultWorkerTwo)
-  def work(metadata, msg)
-    false
-  end
-end
+PRODUCER_ITERATIONS = 10
 
 describe RadioactiveBunnies::DeadletterWorker do
 
@@ -60,24 +11,36 @@ describe RadioactiveBunnies::DeadletterWorker do
     @ch = @conn.create_channel
     @ctx = RadioactiveBunnies::Context.new
     @ctx.log_with(Logger.new(STDOUT))
-    @ctx.run DeadletterProducer, DeadletterDefaultWorker, DeadletterProducerNonArray
-    ['deadletter.producer', 'deadletter.producer.nonarray'].each do |r_key|
-      @ch.default_exchange.publish("hello world", routing_key: r_key)
+    @ctx.run DeadletterProducer, DeadletterProducerNonArray
+    @producer_queues = ['deadletter.producer', 'deadletter.producer.nonarray']
+    PRODUCER_ITERATIONS.times do
+      @producer_queues.each do |r_key|
+        @ch.default_exchange.publish("hello world", routing_key: r_key)
+      end
     end
-    sleep 2
+    sleep 5
   end
 
   after(:all) do
-    @conn.close
     @ctx.stop
+    @conn.close
   end
   context 'when a worker has at least one deadletter class' do
 
     it 'registers with the specified deadletter worker based on a single string class name' do
       expect(DeadletterDefaultWorker.deadletter_producers).to include(DeadletterProducer.name)
     end
+
     it 'notifies the deadletter worker when a single deadletter work is identified' do
       expect(DeadletterDefaultWorker.deadletter_producers).to include(DeadletterProducerNonArray.name)
+    end
+
+    it 'starts any deadletter workers that are not running regardless of class name' do
+      expect(DeadletterSecondWorker.running?).to be_truthy
+    end
+
+    before do
+      DeadletterProducerBroken.stop if DeadletterProducerBroken.running?
     end
 
     context 'with two deadletter workers requesting different deadletter exchange names' do
@@ -86,13 +49,17 @@ describe RadioactiveBunnies::DeadletterWorker do
           to raise_error RadioactiveBunnies::DeadletterError
       end
     end
+
     context 'with a deadletter worker that has a nil exchange name' do
       it 'a worker raises an error on start' do
+        original_workers = DeadletterProducerBroken.queue_opts[:deadletter_workers]
         DeadletterProducerBroken.queue_opts[:deadletter_workers] = 'DeadletterDefaultWorkerTwo'
         expect{DeadletterProducerBroken.start(@ctx)}.
           to raise_error RadioactiveBunnies::DeadletterError
+        DeadletterProducerBroken.queue_opts[:deadletter_workers] = original_workers
       end
     end
+
   end
 
   describe '.deadletter_queue_config(q_opts)' do
@@ -102,9 +69,18 @@ describe RadioactiveBunnies::DeadletterWorker do
     end
   end
 
-  context 'when a worker with deadletter enabled timesout' do
-    it 'sends the deadletter to the correct deadletter worker' do
-      expect(DeadletterDefaultWorker.jobs_stats[:passed]).to eql 2
+  context 'when a worker with deadletter enabled rejects a message' do
+    let(:total_messages_sent) {PRODUCER_ITERATIONS * @producer_queues.size}
+
+    it 'sends the deadletter to the correct round robin worker' do
+      half_of_messages_sent = total_messages_sent / 2
+      expect(DeadletterDefaultWorker.jobs_stats[:passed]).to be_within(5).of half_of_messages_sent
+      expect(DeadletterSecondWorker.jobs_stats[:passed]).to be_within(5).of half_of_messages_sent
+      expect(DeadletterDefaultWorker.jobs_stats[:passed] +
+             DeadletterSecondWorker.jobs_stats[:passed]).to eql total_messages_sent
+    end
+    it 'sends the message to a specific deadletter worker' do
+      expect(DeadletterProveWorker.jobs_stats[:passed]).to eql PRODUCER_ITERATIONS
     end
   end
 end
