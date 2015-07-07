@@ -21,6 +21,7 @@ class RadioactiveBunnies::QueueFactory
     [exchange, queue]
   end
 
+  # deprecate this everywhere, use the static
   def build_queue(name, queue_opts = {})
     exchange, queue = self.class.build_exchange_and_queue(@context, name, queue_opts)
     queue

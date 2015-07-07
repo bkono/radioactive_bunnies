@@ -7,7 +7,7 @@ class DeadletterDefaultWorker
   include RadioactiveBunnies::Worker
   from_queue 'deadletter.default',
     prefetch: 1, durable: false, timeout_job_after: 5, threads: 1,
-    exchange: {type: :fanout, name: 'deadletter.exchange'}
+    exchange: {name: 'deadletter.exchange'}
   def work(metadata, msg)
     puts "This is the First"
     true
@@ -18,7 +18,7 @@ class DeadletterProveFanout
   include RadioactiveBunnies::Worker
   from_queue 'deadletter.prove',
     prefetch: 1, durable: false, timeout_job_after: 5, threads: 1,
-    exchange: {type: :fanout, name: 'deadletter.exchange'}
+    exchange: {name: 'deadletter.exchange'}
   def work(metadata, msg)
     puts "This is the Prove"
     true
@@ -29,7 +29,7 @@ class DeadletterSecondWorker
   include RadioactiveBunnies::Worker
   from_queue 'deadletter.default',
     prefetch: 1, durable: false, timeout_job_after: 5, threads: 1,
-    exchange: {type: :fanout, name: 'deadletter.exchange'}
+    exchange: {name: 'deadletter.exchange'}
   def work(metadata, msg)
     puts "This is the Second"
     true
@@ -39,8 +39,8 @@ end
 class DeadletterDefaultWorkerTwo
   include RadioactiveBunnies::Worker
   from_queue 'deadletter.default.two',
-    prefetch: 20, durable: false, timeout_job_after: 5, threads: 1,
-    exchange: {type: :fanout, name: nil}
+    prefetch: 20, durable: false, timeout_job_after: 5, threads: 1, append_env: true,
+    exchange: {name: nil}
 
   def work(metadata, msg)
     true
